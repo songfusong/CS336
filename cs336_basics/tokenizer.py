@@ -2,30 +2,34 @@ import re
 import base64
 from typing import Dict, List, Tuple, Iterable, Iterator, Union, Type, ClassVar
 
+# --- 1. 预分词正则模式 (Pre-tokenization Regex) ---
+# GPT-2/tiktoken 风格的预分词模式，用于将文本切分成逻辑块。
+PAT = re.compile(
+    r"""'s|'t|'re|'ve|'m|'ll|'d| ?[A-Za-z\u00C0-\u017F]+| ?[0-9]+| ?[^\sA-Za-z0-9\u00C0-\u017F]+|\s+(?!\S)|\s+""",
+    re.UNICODE 
+)
+
+
 class Tokenizer:
     """
-    实现了支持特殊令牌的字节对编码(BPE)分词器。
-    
-    BPE 过程（在 self._bpe_encode_bytes 中）通过全局迭代地应用最高优先级
-    的合并规则（来自 'merges' 列表），直到无法再进行合并。
+    实现了支持特殊令牌和预分词的字节对编码(BPE)分词器。
     """
     
     # ----------------------------------------------------------------------
-    # 构造函数: 包含 special_tokens 参数
+    # 构造函数
     # ----------------------------------------------------------------------
     def __init__(self, vocab: Dict[int, bytes], merges: List[Tuple[bytes, bytes]], special_tokens: Union[List[str], None] = None):
         """
         构造函数。
         """
         
-        # 核心数据结构 (保持不变)
         self.id_to_token: Dict[int, bytes] = vocab
         self.token_to_id: Dict[bytes, int] = {v: k for k, v in vocab.items()}
         self.merges: List[Tuple[bytes, bytes]] = merges
         self.merges_rank: Dict[Tuple[bytes, bytes], int] = {pair: i for i, pair in enumerate(merges)}
         self.merges_map: Dict[Tuple[bytes, bytes], bytes] = {}
 
-        # 1. 特殊令牌处理 (Special Tokens Handling)
+        # 1. 特殊令牌处理
         self.special_tokens_list: List[str] = special_tokens if special_tokens else []
         self.special_tokens_set: set = set(self.special_tokens_list)
         
@@ -38,9 +42,8 @@ class Tokenizer:
                 self.id_to_token[next_id] = token_bytes
                 next_id += 1
                 
-        # 2. 构建正则表达式
+        # 2. 构建特殊令牌正则表达式 (按长度降序确保最长匹配优先)
         if self.special_tokens_list:
-            # 核心修复: 按长度降序排序特殊令牌，以确保最长匹配优先
             sorted_tokens = sorted(list(self.special_tokens_set), key=len, reverse=True)
             escaped_tokens = [re.escape(s) for s in sorted_tokens]
             self.special_tokens_pattern = re.compile(f"({'|'.join(escaped_tokens)})")
@@ -54,71 +57,60 @@ class Tokenizer:
                 self.merges_map[(token1, token2)] = merged_token
 
     # --------------------------------------------------------------------------
-    # 核心 BPE 编码逻辑 (已修改为接受 forbidden_pairs)
+    # 核心 BPE 编码逻辑
     # --------------------------------------------------------------------------
     
     def _bpe_encode_bytes(self, token_bytes: bytes, 
                          forbidden_pairs: Union[set, None] = None) -> List[int]:
         """
         对原始字节序列执行 BPE 合并。
-        接受一个可选的 forbidden_pairs 集合来禁止某些合并（用于兼容 tiktoken）。
         """
         
-        # 1. 从初始 token 开始：单字节 token 列表
         tokens: List[bytes] = [bytes([b]) for b in token_bytes]
-        
-        # 使用传入的禁止对，或默认为空集
         forbidden = forbidden_pairs if forbidden_pairs is not None else set() 
         
         while True:
             best_pair = None
             min_rank = float('inf')
             
-            # 2. 查找当前 token 序列中可应用的最高优先级（排名最低）合并规则
             i = 0
             while i < len(tokens) - 1:
                 pair = (tokens[i], tokens[i+1])
                 
-                # ==== 修复: 检查传入的禁止合并对 ====
+                # 检查禁止合并对
                 if pair in forbidden: 
                     i += 1 
                     continue
-                # =======================================
                 
                 rank = self.merges_rank.get(pair)
                 
                 if rank is not None and rank < min_rank:
-                    # 检查合并结果是否在我们的映射中（即它是否有 ID）
                     if pair in self.merges_map:
                         min_rank = rank
                         best_pair = pair
                 i += 1
             
-            # 3. 如果没有找到可用的合并规则，退出循环
             if best_pair is None:
                 break
                 
-            # 4. 将最高优先级的合并规则全局应用到序列中的所有出现位置
             merged_token = self.merges_map[best_pair]
             
             new_tokens = []
             i = 0
             while i < len(tokens):
-                # 检查是否匹配到最佳合并对并进行合并
                 if i < len(tokens) - 1 and (tokens[i], tokens[i+1]) == best_pair:
                     new_tokens.append(merged_token)
-                    i += 2 # 跳过被合并的第二个 token
+                    i += 2 
                 else:
                     new_tokens.append(tokens[i])
                     i += 1
             
-            tokens = new_tokens # 更新序列以进行下一轮迭代
+            tokens = new_tokens 
 
-        # 5. 将最终的字节 token 映射为它们的 ID
         return [self.token_to_id[t] for t in tokens]
 
     # --------------------------------------------------------------------------
-    # 公共接口方法 (已修改 encode 逻辑)
+    # 公共接口方法
     # --------------------------------------------------------------------------
     
     @classmethod
@@ -130,7 +122,6 @@ class Tokenizer:
         vocab: Dict[int, bytes] = {}
         merges: List[Tuple[bytes, bytes]] = []
 
-        # 加载词汇表：格式 'ID BASE64_ENCODED_BYTES'
         try:
             with open(vocab_filepath, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -140,13 +131,11 @@ class Tokenizer:
                     if len(parts) != 2: continue
                     
                     token_id = int(parts[0])
-                    # 从 Base64 字符串解码回 bytes
                     token_bytes = base64.b64decode(parts[1])
                     vocab[token_id] = token_bytes
         except Exception as e:
             raise IOError(f"从 {vocab_filepath} 加载词汇表时出错: {e}")
 
-        # 加载合并规则：格式 'BASE64_ENCODED_BYTES1 BASE64_ENCODED_BYTES2'
         try:
             with open(merges_filepath, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -155,51 +144,43 @@ class Tokenizer:
                     parts = line.split()
                     if len(parts) != 2: continue
                     
-                    # 从 Base64 字符串解码回 bytes
                     token1 = base64.b64decode(parts[0])
                     token2 = base64.b64decode(parts[1])
                     merges.append((token1, token2))
         except Exception as e:
             raise IOError(f"从 {merges_filepath} 加载合并规则时出错: {e}")
             
-        # 传入 special_tokens 参数
         return cls(vocab, merges, special_tokens)
 
     def encode(self, text: str) -> List[int]:
         """将输入文本编码为 token ID 序列。"""
         
-        # 定义 GPT-2/GPT-3 兼容模式下常用的禁止合并对
-        DEFAULT_FORBIDDEN = {(b'\n', b'\n'), (b'\r', b'\n')}
-        
+        # 兼容性：确保只有在没有特殊令牌时才对整个文本应用 BPE
         if not self.special_tokens_pattern:
-            # 情况 1: 没有特殊令牌，对整个文本的字节序列执行 BPE 编码，应用禁止规则
             token_bytes = text.encode('utf-8')
-            return self._bpe_encode_bytes(token_bytes, forbidden_pairs=DEFAULT_FORBIDDEN)
+            return self._bpe_encode_bytes(token_bytes, forbidden_pairs=None)
 
-        # 情况 2: 存在特殊令牌。使用正则表达式切分文本。
+        # 1. 特殊令牌切分
         parts = self.special_tokens_pattern.split(text)
         
         ids: List[int] = []
         for part in parts:
-            if not part:
-                continue
+            if not part: continue
             
             if part in self.special_tokens_set:
-                # 切分部分是特殊令牌
+                # 2. 如果是特殊令牌，直接编码
                 token_bytes = part.encode('utf-8')
                 ids.append(self.token_to_id[token_bytes])
             else:
-                # 切分部分是普通文本，应用 BPE 编码
-                token_bytes = part.encode('utf-8')
+                # 3. 核心修改：对普通文本块应用 PAT 预分词，使用 finditer 替代 findall
+                pre_tokens: Iterator[re.Match] = PAT.finditer(part)
                 
-                # 兼容性修复：如果文本块是纯粹的换行符 \n\n 或 \r\n，则不应用禁止规则
-                # 这是因为 tiktoken 在特殊令牌边界允许这些特殊的合并。
-                forbidden_to_use = DEFAULT_FORBIDDEN
-                if part in ('\n\n', '\r\n'):
-                    forbidden_to_use = set() # 禁用禁止规则
+                for match in pre_tokens:
+                    pre_token = match.group(0) # 从 Match 对象中提取匹配的字符串
+                    token_bytes = pre_token.encode('utf-8')
+                    # 4. 对每个预分词块执行 BPE 编码，不再应用禁止规则
+                    ids.extend(self._bpe_encode_bytes(token_bytes, forbidden_pairs=None)) 
                     
-                ids.extend(self._bpe_encode_bytes(token_bytes, forbidden_pairs=forbidden_to_use))
-                
         return ids
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
@@ -218,8 +199,6 @@ class Tokenizer:
             if token_bytes is not None:
                 tokens.append(token_bytes)
             else:
-                # 处理未知 ID（词汇表外）
-                tokens.append(b'\xef\xbf\xbd') # 使用 UTF-8 替换字符
+                tokens.append(b'\xef\xbf\xbd') 
                 
-        # 连接所有字节 token，并使用 'replace' 错误处理解码为字符串
         return b''.join(tokens).decode('utf-8', errors='replace')
