@@ -2,7 +2,7 @@ import re
 import base64
 from typing import Dict, List, Tuple, Iterable, Iterator, Union, Type, ClassVar
 import pickle
-from tokenizer import Tokenizer
+from cs336_basics.tokenizer import Tokenizer
 
 def load_bpe_data(vocab_filepath: str, merges_filepath: str) -> Tuple[Dict[int, bytes], List[Tuple[bytes, bytes]]]:
     """
