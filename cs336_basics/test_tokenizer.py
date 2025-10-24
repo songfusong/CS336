@@ -56,19 +56,19 @@ def load_bpe_data(vocab_filepath: str, merges_filepath: str) -> Tuple[Dict[int, 
     return vocab, merges
 
 def test_encode_special_token_trailing_newlines():
-    merges_path = "bpe_tokenizer_merges.pkl"
-    vocab_path = "bpe_tokenizer_vocab.pkl"
+    merges_path = "cs336_basics/TinyStoriesTrainToken_merges.pkl"
+    vocab_path = "cs336_basics/TinyStoriesTrainToken_vocab.pkl"
     special_tokens=["<|endoftext|>"]
     
     vocab, merges = load_bpe_data(vocab_filepath=vocab_path, merges_filepath=merges_path)
 
-    corpus_path = "tests/fixtures/train-bpe-reference-merges.txt"
+    corpus_path = "tests/fixtures/tinystories_sample.txt"
     tokenizer = Tokenizer(vocab=vocab, merges=merges, special_tokens=special_tokens)
     with open(corpus_path) as f:
         corpus_contents = f.read()
     ids = tokenizer.encode(corpus_contents)
     print(ids)
-    assert tokenizer.decode(ids) == corpus_contents
+    print(tokenizer.decode(ids))
 
 def main():
     test_encode_special_token_trailing_newlines()

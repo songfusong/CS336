@@ -118,5 +118,6 @@ class TransformerLM(nn.Module):
 # 因为交叉熵损失函数通常直接接收 logits 并在内部执行 log-softmax。
 #    然而，**根据提供的架构图**，它明确显示 Softmax 
 # 是模型的一部分并输出“Output Probabilities”，因此我们在 forward 中执行 Softmax。
+# debug后不执行Softmax
 # 2. Positional Encoding（如 RoPE）的实现细节被包含在假设的 
 # `Embedding` 或 `TransformerBlock` 内部，因为上下文长度 `context_length` 是必需的输入参数之一。
